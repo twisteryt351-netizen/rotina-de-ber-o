@@ -1,0 +1,39 @@
+name: Robo de Cuidados com Bebes
+
+on:
+  schedule:
+    - cron: '0 12 * * *'   # 12:00 UTC = 09:00 em Brasília
+  workflow_dispatch:
+
+jobs:
+  postar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependências
+        run: pip install requests groq google-api-python-client google-auth-oauthlib google-auth
+
+      - name: Rodar robô de bebês
+        run: python bebes_diario.py
+        env:
+          GROQ_API_KEY:           ${{ secrets.GROQ_API_KEY }}
+          BLOGGER_ID_BEBES:       ${{ secrets.BLOGGER_ID_BEBES }}
+          BLOGGER_CLIENT_ID:      ${{ secrets.BLOGGER_CLIENT_ID }}
+          BLOGGER_CLIENT_SECRET:  ${{ secrets.BLOGGER_CLIENT_SECRET }}
+          BLOGGER_REFRESH_TOKEN:  ${{ secrets.BLOGGER_REFRESH_TOKEN }}
+          # Token opcional do Pollinations.ai para geração de imagens (fallback: Openverse)
+          POLLINATIONS_TOKEN:     ${{ secrets.POLLINATIONS_TOKEN }}
+          IMGBB_API_KEY:          ${{ secrets.IMGBB_API_KEY }}
+
+      - name: Salvar histórico
+        run: |
+          git config user.name "Robo de Bebes"
+          git config user.email "robo@exemplo.com"
+          git add historico_bebes.txt || true
+          git commit -m "Atualiza historico de bebes" || true
+          git push || true
