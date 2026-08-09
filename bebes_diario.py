@@ -431,6 +431,14 @@ def confirmar_url_acessivel(url, tentativas=4, espera=2):
             r = requests.head(url, timeout=10, allow_redirects=True)
             if r.status_code == 200:
                 return True
+            # Alguns CDNs (ex.: ImgBB) recusam ou não respondem bem a HEAD.
+            # Nesses casos, confirma com um GET leve antes de desistir.
+            if r.status_code in (403, 405, 501):
+                r2 = requests.get(url, timeout=10, stream=True)
+                ok = r2.status_code == 200
+                r2.close()
+                if ok:
+                    return True
         except Exception:
             pass
         time.sleep(espera)
