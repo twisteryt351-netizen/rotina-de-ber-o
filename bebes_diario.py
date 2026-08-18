@@ -18,7 +18,7 @@ CLIENT_ID         = os.environ.get("BLOGGER_CLIENT_ID")
 CLIENT_SECRET     = os.environ.get("BLOGGER_CLIENT_SECRET")
 REFRESH_TOKEN     = os.environ.get("BLOGGER_REFRESH_TOKEN")
 POLLINATIONS_TOKEN = os.environ.get("POLLINATIONS_TOKEN")  # opcional: remove marca dagua e aumenta limite
-# Sem token: 1 requisicao a cada 15s. Com token gratuito (auth.pollinations.ai): a cada 5s.
+# Sem token: 1 requisicao a cada 18s. Com token gratuito (auth.pollinations.ai): a cada 8s.
 INTERVALO_POLLINATIONS = 6 if POLLINATIONS_TOKEN else 16
 IMGBB_API_KEY     = os.environ.get("IMGBB_API_KEY")  # hospedagem permanente das imagens
 
@@ -36,7 +36,7 @@ if not IMGBB_API_KEY:
     print("⚠️  IMGBB_API_KEY não configurada — imagens geradas via IA serão embed como base64 (fallback).")
 
 groq_client = Groq(api_key=GROQ_API_KEY)
-MODELO_IA   = "llama-3.3-70b-versatile"
+MODELO_IA   = "openai/gpt-oss-120b"
 
 # ─────────────────────────────────────────────
 #  LISTA DE TEMAS — cuidados com bebês e crianças pequenas
