@@ -38,6 +38,14 @@ if not IMGBB_API_KEY:
 groq_client = Groq(api_key=GROQ_API_KEY)
 MODELO_IA   = "openai/gpt-oss-120b"
 
+def _mascarar(valor):
+    if not valor:
+        return "❌ NÃO configurado"
+    return f"✅ configurado ({len(valor)} caracteres, começa com '{valor[:4]}...')"
+
+print(f"🔑 POLLINATIONS_TOKEN: {_mascarar(POLLINATIONS_TOKEN)}")
+print(f"🔑 IMGBB_API_KEY:      {_mascarar(IMGBB_API_KEY)}")
+
 # ─────────────────────────────────────────────
 #  LISTA DE TEMAS — cuidados com bebês e crianças pequenas
 # ─────────────────────────────────────────────
@@ -125,13 +133,27 @@ def escolher_tema():
 # ─────────────────────────────────────────────
 #  GROQ (texto)
 # ─────────────────────────────────────────────
-def pedir_ia_groq(prompt, temperatura=0.75):
-    response = groq_client.chat.completions.create(
-        messages=[{"role": "user", "content": prompt}],
-        model=MODELO_IA,
-        temperature=temperatura,
-    )
-    return response.choices[0].message.content.strip()
+def pedir_ia_groq(prompt, temperatura=0.75, max_tokens=3000, tentativas=3):
+    kwargs = {
+        "messages": [{"role": "user", "content": prompt}],
+        "model": MODELO_IA,
+        "temperature": temperatura,
+        "max_tokens": max_tokens,
+    }
+    for tentativa in range(1, tentativas + 1):
+        try:
+            response = groq_client.chat.completions.create(**kwargs)
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            msg = str(e)
+            eh_rate_limit = "rate_limit_exceeded" in msg or "429" in msg or "413" in msg or "tokens per minute" in msg
+            if eh_rate_limit and tentativa < tentativas:
+                espera = 65  # a janela de TPM da Groq reseta por minuto
+                print(f"⚠️ Limite de tokens/min da Groq atingido (tentativa {tentativa}/{tentativas}). "
+                      f"Aguardando {espera}s pra janela resetar... ({msg[:150]})")
+                time.sleep(espera)
+            else:
+                raise
 
 
 # ─────────────────────────────────────────────
@@ -365,31 +387,44 @@ DIMENSOES_RATIO = {
 }
 
 
-def gerar_imagem_worker_b64(prompt_img, ratio="16:9"):
+def gerar_imagem_worker_b64(prompt_img, ratio="16:9", tentativas=3):
     """Gera a imagem via Pollinations.ai (gratuito, sem chave, sem cota diaria)
-    e retorna o base64 bruto da imagem."""
+    e retorna o base64 bruto da imagem. Tenta algumas vezes com espera
+    crescente — falhas isoladas/timeouts do Pollinations são comuns."""
     largura, altura = DIMENSOES_RATIO.get(ratio, (1280, 720))
     prompt_codificado = urllib.parse.quote(prompt_img)
     url = f"https://image.pollinations.ai/prompt/{prompt_codificado}"
-    params = {
-        "width": largura,
-        "height": altura,
-        "model": "flux",
-        "seed": random.randint(1, 999999),
-        "nologo": "true",
-    }
     headers = {}
     if POLLINATIONS_TOKEN:
         headers["Authorization"] = f"Bearer {POLLINATIONS_TOKEN}"
-    resp = requests.get(url, params=params, headers=headers, timeout=120)
-    resp.raise_for_status()
-    content_type = resp.headers.get("Content-Type", "")
-    if "image" not in content_type:
-        raise ValueError(f"Resposta nao parece ser uma imagem (Content-Type: {content_type})")
-    b64 = base64.b64encode(resp.content).decode("utf-8")
-    if not b64:
-        raise ValueError("Pollinations.ai retornou imagem vazia.")
-    return b64
+
+    ultimo_erro = None
+    for tentativa in range(1, tentativas + 1):
+        try:
+            params = {
+                "width": largura, "height": altura, "model": "flux",
+                "seed": random.randint(1, 999999), "nologo": "true",
+            }
+            resp = requests.get(url, params=params, headers=headers, timeout=120)
+            if resp.status_code != 200:
+                trecho = resp.text[:200].replace("\n", " ")
+                raise ValueError(f"HTTP {resp.status_code} — resposta: {trecho!r}")
+            content_type = resp.headers.get("Content-Type", "")
+            if "image" not in content_type:
+                trecho = resp.text[:200].replace("\n", " ")
+                raise ValueError(f"Resposta não é imagem (Content-Type: {content_type}) — corpo: {trecho!r}")
+            b64 = base64.b64encode(resp.content).decode("utf-8")
+            if not b64:
+                raise ValueError("Pollinations.ai retornou imagem vazia.")
+            return b64
+        except Exception as e:
+            ultimo_erro = e
+            if tentativa < tentativas:
+                espera = 5 * tentativa
+                print(f"  ⚠️  Pollinations.ai falhou (tentativa {tentativa}/{tentativas}): {e}. "
+                      f"Tentando de novo em {espera}s...")
+                time.sleep(espera)
+    raise ultimo_erro
 
 
 # ─────────────────────────────────────────────
@@ -404,7 +439,7 @@ def hospedar_imgbb(b64_data, nome="bebes_img"):
         raise ValueError("IMGBB_API_KEY não configurada.")
 
     resp = requests.post(
-        "https://api.imgbb.com/1/image",
+        "https://api.imgbb.com/1/upload",
         data={
             "key":    IMGBB_API_KEY,
             "image":  b64_data,
@@ -530,12 +565,16 @@ def obter_imagens_html(itens_imagem, titulo, img_en_fallback):
                     src = src_candidata
                     print(f"  ✅ Pollinations.ai + ImgBB OK e confirmado → {src[:60]}...")
                 else:
-                    print("  ⚠️  ImgBB não confirmou a tempo. Usando data URI como backup...")
-                    src = f"data:image/png;base64,{b64}"
+                    raise ValueError("ImgBB não confirmou a tempo.")
             except Exception as e_imgbb:
-                # ImgBB falhou mas temos o b64 — usa data URI como backup
-                print(f"  ⚠️  ImgBB falhou ({e_imgbb}). Usando data URI como backup...")
-                src = f"data:image/png;base64,{b64}"
+                # NUNCA usa data URI aqui: o Blogger não gera miniatura nem
+                # sempre renderiza base64 embutido de primeira, o que causa
+                # o "só aparece depois de abrir e atualizar". Cai pra uma
+                # URL externa real (Openverse) em vez disso.
+                print(f"  ⚠️  ImgBB falhou/não confirmou ({e_imgbb}). Buscando no Openverse...")
+                if openverse_cache is None:
+                    openverse_cache = buscar_imagens_openverse(img_en_fallback, quantidade=len(itens_imagem))
+                src = openverse_cache[i % len(openverse_cache)]
 
         # ── Tentativa 2: Openverse (Pollinations.ai falhou) ─
         except Exception as e_ia:
@@ -620,8 +659,19 @@ def publicar_no_blogger(titulo, conteudo, labels=None):
     if labels:
         corpo["labels"] = labels
     res = blogger.posts().insert(blogId=BLOGGER_ID, body=corpo).execute()
+    post_id = res.get("id")
     print(f"👶 Postado: '{titulo}' -> {res.get('url')}")
     print(f"🏷️  Marcadores: {', '.join(labels) if labels else '(nenhum)'}")
+
+    # Automatiza o "abrir e atualizar" manual: o Blogger às vezes só
+    # (re)processa miniaturas/imagens externas quando o post é resalvo.
+    if post_id:
+        try:
+            time.sleep(5)
+            blogger.posts().update(blogId=BLOGGER_ID, postId=post_id, body=corpo).execute()
+            print("  🔄 Re-save automático aplicado (equivalente a abrir e atualizar).")
+        except Exception as e_update:
+            print(f"  ⚠️  Re-save automático falhou (post já está publicado normalmente): {e_update}")
 
 
 # ─────────────────────────────────────────────
